@@ -275,6 +275,22 @@
     color: var(--ink-soft);
     width: 10px;
   }
+  .duel-back-row {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+  }
+  .duel-back-row .btn-ghost {
+    width: auto;
+    padding-left: 20px;
+    padding-right: 20px;
+    font-size: 14px;
+  }
+  .btn-ghost:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .btn-ghost:disabled:active { transform: none; }
   .center-icon { font-size: 40px; text-align: center; margin-bottom: 6px; }
   .center-title { text-align: center; }
   .top9-grid {
@@ -376,7 +392,7 @@ function freshState() {
     finalists: [],
     eliminated: [],
     revived: [],
-    finalComparisonsDone: 0,
+    final: null,
     finalEstimatedTotal: 1,
     top9: [],
   };
@@ -547,7 +563,7 @@ function renderPrelimClear() {
   };
 }
 
-// ---------- main round (swiss-ish scoring to cut down to 18 finalists) ----------
+// ---------- main round (swiss-ish scoring to cut down to finalists) ----------
 function startMainRound() {
   const scores = {};
   state.candidates.forEach(m => scores[m.name] = 0);
@@ -557,6 +573,7 @@ function startMainRound() {
     scores,
     pairs: [],
     pairIdx: 0,
+    winnerHistory: [],
   };
   setupMainRoundPairs();
   state.screen = 'mainDuel';
@@ -588,6 +605,7 @@ function setupMainRoundPairs() {
   for (let i = 0; i < pool.length; i += 2) pairs.push([pool[i], pool[i + 1]]);
   m.pairs = pairs;
   m.pairIdx = 0;
+  m.winnerHistory = [];
 }
 
 function renderMainDuel() {
@@ -604,6 +622,7 @@ function renderMainDuel() {
     <h2 class="display center-title">どっちの顔が好き？</h2>
     <p class="lead center-title">直感で1人をタップ</p>
     <div class="duel-wrap" id="duel"></div>
+    <div class="duel-back-row"><button class="btn btn-ghost" id="duelBackBtn" ${m.pairIdx === 0 ? 'disabled' : ''}>← 前の一戦に戻る</button></div>
   `;
   app.appendChild(wrap);
   const duel = wrap.querySelector('#duel');
@@ -613,6 +632,7 @@ function renderMainDuel() {
     el.innerHTML = `<img src="${member.img}" alt="${member.name}"><div class="name-tag">${member.name}</div>`;
     el.onclick = () => {
       m.scores[member.name] += 1;
+      m.winnerHistory.push(member.name);
       m.pairIdx++;
       if (m.pairIdx >= m.pairs.length) {
         if (m.round >= m.totalRounds) {
@@ -628,6 +648,16 @@ function renderMainDuel() {
     };
     duel.appendChild(el);
   });
+
+  const backBtn = wrap.querySelector('#duelBackBtn');
+  if (m.pairIdx > 0) {
+    backBtn.onclick = () => {
+      m.pairIdx--;
+      const prevWinner = m.winnerHistory.pop();
+      if (prevWinner) m.scores[prevWinner] -= 1;
+      render();
+    };
+  }
 }
 
 function finishMainRound() {
@@ -659,63 +689,39 @@ function renderMainClear() {
 // ---------- revival round: single-elimination bracket among the eliminated, revives 2 ----------
 function startRevival() {
   const list = state.eliminated;
-  state.screen = 'revivalDuel';
-
   if (list.length === 0) { finishRevival([]); return; }
   if (list.length === 1) { finishRevival([list[0]]); return; }
 
-  const totalMatches = list.length - 1;
-  let matchesDone = 0;
-  let currentPair = null;
-  let resolveFn = null;
-
-  function compareUI(a, b) {
-    return new Promise(resolve => {
-      currentPair = [a, b];
-      resolveFn = resolve;
-      render();
-    });
-  }
-  window.__revivalCompareHandler = (pickedFirst) => {
-    matchesDone++;
-    const r = resolveFn;
-    resolveFn = null;
-    r(pickedFirst);
+  state.revival = {
+    totalMatches: list.length - 1,
+    completedBeforeRound: 0,
+    pool: shuffle(list),
+    pairs: [],
+    byeMember: null,
+    pairIdx: 0,
+    roundWinners: [],
+    lastLoser: null,
   };
-  window.__getRevivalPair = () => currentPair;
-  window.__getRevivalProgress = () => ({ done: matchesDone, total: totalMatches });
-
-  async function bracket(pool) {
-    let current = shuffle(pool);
-    let lastLoser = null;
-    while (current.length > 1) {
-      let next = [];
-      let byeMember = null;
-      if (current.length % 2 === 1) {
-        const idx = Math.floor(Math.random() * current.length);
-        byeMember = current[idx];
-        current = current.slice(0, idx).concat(current.slice(idx + 1));
-      }
-      for (let i = 0; i < current.length; i += 2) {
-        const a = current[i], b = current[i + 1];
-        const aWins = await compareUI(a, b);
-        const winner = aWins ? a : b;
-        const loser = aWins ? b : a;
-        lastLoser = loser;
-        next.push(winner);
-      }
-      if (byeMember) next.push(byeMember);
-      current = next;
-    }
-    return { champion: current[0], runnerUp: lastLoser };
-  }
-
-  bracket(list).then(({ champion, runnerUp }) => {
-    const revived = runnerUp ? [champion, runnerUp] : [champion];
-    finishRevival(revived);
-  });
-
+  setupRevivalRoundPairs();
+  state.screen = 'revivalDuel';
   render();
+}
+
+function setupRevivalRoundPairs() {
+  const r = state.revival;
+  let pool = r.pool.slice();
+  let byeMember = null;
+  if (pool.length % 2 === 1) {
+    const idx = Math.floor(Math.random() * pool.length);
+    byeMember = pool[idx];
+    pool = pool.slice(0, idx).concat(pool.slice(idx + 1));
+  }
+  const pairs = [];
+  for (let i = 0; i < pool.length; i += 2) pairs.push([pool[i], pool[i + 1]]);
+  r.pairs = pairs;
+  r.byeMember = byeMember;
+  r.pairIdx = 0;
+  r.roundWinners = [];
 }
 
 function finishRevival(revived) {
@@ -726,32 +732,66 @@ function finishRevival(revived) {
 }
 
 function renderRevivalDuel() {
-  const pair = window.__getRevivalPair ? window.__getRevivalPair() : null;
-  if (!pair) return;
-  const [a, b] = pair;
-  const prog = window.__getRevivalProgress ? window.__getRevivalProgress() : { done: 0, total: 1 };
-  const pct = Math.min(99, Math.round((prog.done / prog.total) * 100));
+  const r = state.revival;
+  const [a, b] = r.pairs[r.pairIdx];
+  const done = r.completedBeforeRound + r.pairIdx;
+  const pct = Math.min(99, Math.round((done / r.totalMatches) * 100));
 
   const wrap = document.createElement('div');
   wrap.innerHTML = `
-    <span class="stage-tag">🔁 敗者復活 ${prog.done + 1} / ${prog.total}</span>
+    <span class="stage-tag">🔁 敗者復活 ${done + 1} / ${r.totalMatches}</span>
     <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
     <h2 class="display center-title">どっちの顔を復活させたい？</h2>
     <p class="lead center-title">本選で涙をのんだ${state.eliminated.length}人から、決勝行きの${Math.min(REVIVAL_SLOTS, state.eliminated.length)}枠をかけたバトル</p>
     <div class="duel-wrap" id="duel"></div>
+    <div class="duel-back-row"><button class="btn btn-ghost" id="duelBackBtn" ${r.pairIdx === 0 ? 'disabled' : ''}>← 前の一戦に戻る</button></div>
   `;
   app.appendChild(wrap);
   const duel = wrap.querySelector('#duel');
+
+  function pick(isA) {
+    const winner = isA ? a : b;
+    const loser = isA ? b : a;
+    r.roundWinners.push(winner);
+    r.lastLoser = loser;
+    r.pairIdx++;
+    if (r.pairIdx >= r.pairs.length) {
+      let nextPool = r.roundWinners.slice();
+      if (r.byeMember) nextPool.push(r.byeMember);
+      r.completedBeforeRound += r.pairs.length;
+      if (nextPool.length <= 1) {
+        const champion = nextPool[0];
+        const revived = r.lastLoser ? [champion, r.lastLoser] : [champion];
+        finishRevival(revived);
+        return;
+      }
+      r.pool = nextPool;
+      setupRevivalRoundPairs();
+      render();
+    } else {
+      render();
+    }
+  }
+
   const el1 = document.createElement('div');
   el1.className = 'duel-card';
   el1.innerHTML = `<img src="${a.img}" alt="${a.name}"><div class="name-tag">${a.name}</div>`;
-  el1.onclick = () => window.__revivalCompareHandler(true);
+  el1.onclick = () => pick(true);
   const el2 = document.createElement('div');
   el2.className = 'duel-card';
   el2.innerHTML = `<img src="${b.img}" alt="${b.name}"><div class="name-tag">${b.name}</div>`;
-  el2.onclick = () => window.__revivalCompareHandler(false);
+  el2.onclick = () => pick(false);
   duel.appendChild(el1);
   duel.appendChild(el2);
+
+  const backBtn = wrap.querySelector('#duelBackBtn');
+  if (r.pairIdx > 0) {
+    backBtn.onclick = () => {
+      r.pairIdx--;
+      r.roundWinners.pop();
+      render();
+    };
+  }
 }
 
 function renderRevivalClear() {
@@ -778,31 +818,43 @@ function renderRevivalClear() {
   document.getElementById('toFinalBtn2').onclick = () => startFinalRound(state.finalists);
 }
 
-// ---------- final round: merge sort driven by UI taps ----------
+// ---------- final round: merge sort driven by UI taps, with full undo ----------
+// state.final.answers records every comparison result made so far, in order.
+// Going "back" pops the last answer and re-runs the merge sort from scratch,
+// replaying the remaining answers instantly (merge sort's comparison sequence
+// is a deterministic function of prior answers, so this reconstructs the exact
+// same pending pair) and pausing again for real input.
+let __finalResolve = null;
+
 function startFinalRound(list) {
   state.finalists = list;
-  state.finalComparisonsDone = 0;
+  state.final = { list, answers: [], currentPair: null };
   const n = list.length;
   state.finalEstimatedTotal = Math.max(1, Math.ceil(n * Math.log2(Math.max(n, 2))));
   state.screen = 'finalDuel';
+  runFinalMergeSort();
+}
 
-  let currentPair = null;
-  let resolveFn = null;
+function runFinalMergeSort() {
+  const f = state.final;
+  let replayIdx = 0;
 
   function compareUI(a, b) {
+    if (replayIdx < f.answers.length) {
+      const ans = f.answers[replayIdx++];
+      return Promise.resolve(ans);
+    }
     return new Promise(resolve => {
-      currentPair = [a, b];
-      resolveFn = resolve;
+      f.currentPair = [a, b];
+      __finalResolve = (ans) => {
+        f.answers.push(ans);
+        replayIdx++;
+        __finalResolve = null;
+        resolve(ans);
+      };
       render();
     });
   }
-  window.__finalCompareHandler = (pickedFirst) => {
-    state.finalComparisonsDone++;
-    const r = resolveFn;
-    resolveFn = null;
-    r(pickedFirst);
-  };
-  window.__getCurrentPair = () => currentPair;
 
   async function mergeSortAsync(arr) {
     if (arr.length <= 1) return arr;
@@ -819,20 +871,32 @@ function startFinalRound(list) {
     return result.concat(left.slice(i)).concat(right.slice(j));
   }
 
-  mergeSortAsync(list).then(sorted => {
+  mergeSortAsync(f.list).then(sorted => {
     state.top9 = sorted.slice(0, 9);
     state.screen = 'result';
     render();
   });
-
-  render();
 }
 
+function finalGoBack() {
+  const f = state.final;
+  if (!f || f.answers.length === 0) return;
+  f.answers.pop();
+  __finalResolve = null;
+  runFinalMergeSort();
+}
+
+window.__finalCompareHandler = (pickedFirst) => {
+  if (__finalResolve) __finalResolve(pickedFirst);
+};
+
 function renderFinalDuel() {
-  const pair = window.__getCurrentPair ? window.__getCurrentPair() : null;
+  const f = state.final;
+  const pair = f ? f.currentPair : null;
   if (!pair) return;
   const [a, b] = pair;
-  const pct = Math.min(99, Math.round((state.finalComparisonsDone / state.finalEstimatedTotal) * 100));
+  const done = f.answers.length;
+  const pct = Math.min(99, Math.round((done / state.finalEstimatedTotal) * 100));
 
   const wrap = document.createElement('div');
   wrap.innerHTML = `
@@ -841,6 +905,7 @@ function renderFinalDuel() {
     <h2 class="display center-title">どっちの顔が好き？</h2>
     <p class="lead center-title">直感で1人をタップ</p>
     <div class="duel-wrap" id="duel"></div>
+    <div class="duel-back-row"><button class="btn btn-ghost" id="duelBackBtn" ${done === 0 ? 'disabled' : ''}>← 前の一戦に戻る</button></div>
   `;
   app.appendChild(wrap);
   const duel = wrap.querySelector('#duel');
@@ -854,6 +919,11 @@ function renderFinalDuel() {
   el2.onclick = () => window.__finalCompareHandler(false);
   duel.appendChild(el1);
   duel.appendChild(el2);
+
+  const backBtn = wrap.querySelector('#duelBackBtn');
+  if (done > 0) {
+    backBtn.onclick = () => finalGoBack();
+  }
 }
 
 // ---------- result ----------
