@@ -1073,7 +1073,7 @@ async function buildResultImage(top9) {
     if (sRatio > tRatio) {
       sh = img.height; sw = sh * tRatio; sx = (img.width - sw) / 2; sy = 0;
     } else {
-      sw = img.width; sh = sw / tRatio; sx = 0; sy = (img.height - sh) / 2;
+      sw = img.width; sh = sw / tRatio; sx = 0; sy = 0; // 上寄せ: 頭が切れないように一番上から切り出す
     }
     ctx.save();
     roundRect(ctx, x, y, cellW, cellH - 46, 14);
